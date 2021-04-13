@@ -20,7 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            "mowpi_comm = mowpi_comm2.mowpi_ros_comm:main"
+            "mowpi_comm = mowpi_comm2.mowpi_ros_comm:main",
+            "gps_fusion = mowpi_comm2.mowpi_gps_fusion:main"
         ],
     },
 )

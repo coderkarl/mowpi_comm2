@@ -3,7 +3,7 @@ import rclpy
 from rclpy.node import Node
 
 import math
-from math import pi
+from math import pi, cos, sin, atan2
 from geometry_msgs.msg import Twist, Quaternion, Point, Pose, Vector3, Vector3Stamped
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Int16, Float32
@@ -14,91 +14,23 @@ from tf2_ros.transform_broadcaster import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
 
 from my_interfaces.msg import OdomInputs
+from ublox_msgs.msg import NavRELPOSNED
 
 import serial
 import sys
 import numpy as np
 import time
 
-class ReadLine:
-    def __init__(self, s):
-        self.buf = bytearray()
-        self.s = s
-    
-    def readline(self):
-        i = self.buf.find(b"\n")
-        if i >= 0:
-            r = self.buf[:i+1]
-            self.buf = self.buf[i+1:]
-            return r
-        while True:
-            i = max(1, min(2048, self.s.in_waiting))
-            data = self.s.read(i)
-            i = data.find(b"\n")
-            if i >= 0:
-                r = self.buf + data[:i+1]
-                self.buf[0:] = data[i+1:]
-                return r
-            else:
-                self.buf.extend(data)
-
-class MicroSerial():
-
+class GPSFusion(Node):
     def __init__(self):
-        #self.lock = lock
-        # 115200 bits/sec = 14400 bytes/sec = 14 bytes/msec
-        # When reading a number in this application, max bytes 7 bytes ("-32767\n")
-        # So try timeout = 0.002 sec or 28 bytes per readline()
-        self.serial = serial.Serial('/dev/mowpi_feather', baudrate=115200, timeout=0.01) #CHANGE TIMEOUT TO SHORT HERE
+        super().__init__("gps_fusion")
         
-    def safe_write(self, val_str):
-        #self.lock.acquire()
-        self.serial.write(val_str.encode())
-        #self.lock.release()
-
-    def safe_read(self):
-        #self.lock.acquire()
-        val_read_str = self.serial.readline()
-        #self.lock.release()
-        return val_read_str
-        
-    def flush(self):
-        self.serial.flushInput()
-        self.serial.flushOutput()
-
-class Controller():
-    
-    def __init__(self, micro):
-        self.micro = micro
-        self.speed = 0.0
-        self.curv = 0.0
-
-    def write_speed_curv(self, speed_in, curv_in):
-        #  A1/1/<speed_byte> <curv_byte>
-        self.speed = speed_in # m/s
-        self.curv = curv_in # rad/sec
-        #print('speed, curv', speed_in, curv_in)
-        raw_speed = int(speed_in*100.0)+120
-        raw_omega = int(curv_in*180.0/pi)+120
-        speed_byte = bytes([ raw_speed & 0xff]) #-120 to 120 cm/sec
-        curv_byte = bytes([ (raw_omega) & 0xff]) # -120 to 120 deg/sec
-        #print('speed_byte, curv_byte', speed_byte, curv_byte)
-        
-        self.ard.safe_write('A1/1/' + str(raw_speed) + '/' + str(raw_omega) + '/')
-        return
-
-class MicroBridge(Node):
-    def __init__(self):
-        super().__init__("mowpi_ros_comm")
-        
-        self.cmd_sub = self.create_subscription(Twist, "cmd_vel", self.drive_callback, 1)
-        self.blade_cmd_sub = self.create_subscription(Int16, "blade_cmd", self.blade_callback, 2)
         self.imu_sub = self.create_subscription(Imu, "imu", self.imu_callback, 2)
-        self.yawkf_sub = self.create_subscription(Float32, "yawkf_deg", self.yawkf_callback, 2)
+        self.odomIn_sub = self.create_subscription(OdomInputs, "odomInputs", self.odom_callback, 5)
+        self.gps_sub = self.create_subscription(NavRELPOSNED, "navrelposned", self.gps_callback, 2)
         
-        self.odom_pub = self.create_publisher(Odometry, "odom_raw", 5)
-        self.odomIn_pub = self.create_publisher(OdomInputs, "odomInputs",5)
-
+        self.odom_pub = self.create_publisher(Odometry, "odom", 5)
+        
         self.odom_broadcaster = TransformBroadcaster(self)
         self.tfs = TransformStamped()
         self.tfs.header.frame_id = "odom"
@@ -112,10 +44,11 @@ class MicroBridge(Node):
         self.laser_tfs.transform.translation.y = 0.0
         self.laser_tfs.transform.translation.z = 0.0
         
-        self.micro = MicroSerial()
-        self.controller = Controller(self.micro)
-        self.speed = 0.0
-        self.curv = 0.0
+        self.gps_tfs = TransformStamped()
+        self.gps_tfs.header.frame_id = "odom"
+        self.gps_tfs.child_frame_id = "gps"
+        self.east_ant = 0.
+        self.north_ant = 0.
         
         now_stamp = self.get_clock().now().to_msg()
         self.prev_time = now_stamp
@@ -126,16 +59,14 @@ class MicroBridge(Node):
         self.gyroz_rad = 0.0
 
         self.enc_total = 0
-        self.roll_rad = 0
-        self.pitch_rad = 0
-        self.blade_status = -1
+        self.roll_rad = 0.
+        self.pitch_rad = 0.
         
-        self.dist_sum = 0
-        self.time_sum = 0
-        self.vx = 0
+        self.dist_sum = 0.
+        self.time_sum = 0.
+        self.vx = 0.
 
         self.bot_deg_prev = 0.
-        self.bot_deg = 0.
         self.micro_bot_deg = 0.
         self.botx = 0.
         self.boty = 0.
@@ -143,65 +74,34 @@ class MicroBridge(Node):
         self.gyro_sum = 0.0
         self.gyro_count = 0
         
-        # NXP on breadboard
+        # NXP
         self.gyro_bias_rad = 0.06*pi/180
         self.neg_gyro_scale_factor = 1.005
         self.pos_gyro_scale_factor = 1.001
         
-        # original NXP mounted
-        #self.gyro_bias_rad = 0.15*pi/180
-        #self.neg_gyro_scale_factor = 1.014
-        #self.pos_gyro_scale_factor = 0.997
+        # Odom inputs
+        self.enc_left = 0.
+        self.enc_right = 0.
         
-        # micro scale factor, bno
-        self.micro_gyro_scale_factor = 0.99 #0.9896
+        # GPS odom fusion
+        self.gps_initialized = False
+        self.ref_cum_dmeters = 0.0
+        self.ref_cum_dtheta_deg = 0.0
+        self.init_gps_east_sum = 0.0
+        self.init_gps_north_sum = 0.0
+        self.init_gps_count = 0
+        self.gps_buffer = []
+        self.buffer_size = 5
+        self.buffer_full = False
         
         self.timer = self.create_timer(1./20., self.update_odom)
         
-        self.get_logger().info("Started Zumo Serial ROS Comm")
+        self.get_logger().info("Started GPS Fusion")
         
         time.sleep(0.1)
     
     def dt_to_sec(self, stampA, stampB):
         return stampA.sec + stampA.nanosec * 10**-9 - stampB.sec - stampB.nanosec * 10**-9
-                
-    def drive_callback(self, data):
-        v = data.linear.x
-        w = data.angular.z
-        max_speed = 1.2
-        max_omega = 120*pi/180.0
-        
-        if v > max_speed:
-            v = max_speed
-        elif v < -max_speed:
-            v = -max_speed
-        
-        if w > max_omega:
-            w = max_omega
-        elif w < -max_omega:
-            w = -max_omega
-        
-        self.speed = v
-        self.curv = w
-        
-        self.controller.write_speed_curv(self.speed, self.curv)
-            
-        #print("enc_total: ")
-        #print(self.enc_total)
-        #print('roll rad: ',self.roll_rad, ', pitch rad: ',self.pitch_rad)
-    
-    def blade_callback(self,bld):
-        bld_cmd = bld.data
-        bld_str = 'A2/8/' + str(bld_cmd) + '/'
-        print("pre cmd: ", bld_str)
-        if(bld_cmd == 1 and self.blade_status == 0):
-            self.ard.safe_write(bld_str)
-            self.blade_status = 1
-            print("blade cmd: ", bld_str)
-        elif(bld_cmd == 0 and self.blade_status != 0):
-            self.ard.safe_write(bld_str)
-            self.blade_status = 0
-            print("blade cmd: ", bld_str)
         
     def imu_callback(self, data):
         self.accx = data.linear_acceleration.x
@@ -214,8 +114,54 @@ class MicroBridge(Node):
                 #self.gyro_bias_rad = self.gyro_sum / self.gyro_count
                 print('gyro bias deg: ', self.gyro_bias_rad*180/pi)
                 
-    def yawkf_callback(self, msg):
-        self.bot_deg = msg.data
+    def odom_callback(self, data):
+        self.enc_left += data.enc_left
+        self.enc_right += data.enc_left
+        
+    def gps_callback(self, msg):
+        #try:
+        yaw_rad = self.micro_bot_deg*pi/180
+        rel_east = msg.rel_pos_e/100. - 1.0*cos(yaw_rad)
+        rel_north = msg.rel_pos_n/100. - 1.0*sin(yaw_rad)
+        self.east_ant = msg.rel_pos_e/100.
+        self.north_ant = msg.rel_pos_n/100.
+        if not self.gps_initialized:
+            self.init_gps_east_sum += rel_east
+            self.init_gps_north_sum += rel_north
+            self.init_gps_count += 1
+            if self.init_gps_count >= 10:
+                self.botx = self.init_gps_east_sum / self.init_gps_count
+                self.boty = self.init_gps_north_sum / self.init_gps_count
+                self.gps_initialized = True
+        else:
+            self.botx = self.botx*0.9 + rel_east*0.1
+            self.boty = self.boty*0.9 + rel_north*0.1
+            if len(self.gps_buffer) == self.buffer_size:
+                self.gps_buffer.pop(0)
+                self.buffer_full = True
+            self.gps_buffer.append([self.east_ant, self.north_ant])
+            #print("cum_dmeters %.1f, cum_dtheta_deg %.1f" % (self.ref_cum_dmeters, self.ref_cum_dtheta_deg) )
+            if self.buffer_full and self.ref_cum_dmeters > 1.0 and abs(self.ref_cum_dtheta_deg) < 10.0:
+                self.ref_cum_dmeters = 0.0
+                self.ref_cum_dtheta_deg = 0.0
+                dE = self.gps_buffer[-1][0] - self.gps_buffer[0][0]
+                dN = self.gps_buffer[-1][1] - self.gps_buffer[0][1]
+                gps_heading_deg = atan2(dN,dE)*180.0/pi
+                print("gps_heading_deg %.1f, micro_bot_deg %.1f" % (gps_heading_deg, self.micro_bot_deg) )
+                if abs((gps_heading_deg - self.micro_bot_deg) % 360.0) < 30.0:
+                    cur_cos = cos(yaw_rad)
+                    cur_sin = sin(yaw_rad)
+                    gps_cos = cos(gps_heading_deg*pi/180)
+                    gps_sin = sin(gps_heading_deg*pi/180)
+                    net_cos = cur_cos*0.9 + gps_cos*0.1
+                    net_sin = cur_sin*0.9 + gps_sin*0.1
+                    self.micro_bot_deg = atan2(net_sin, net_cos)*180/pi
+            elif self.ref_cum_dmeters > 1.0:
+                self.ref_cum_dmeters = 0.0
+                self.ref_cum_dtheta_deg = 0.0
+        #except:
+        #    print("gps callback error")
+                
     
     def update_odom(self):
         t2 = self.get_clock().now().to_msg()
@@ -242,45 +188,14 @@ class MicroBridge(Node):
                 sf = self.neg_gyro_scale_factor
             dtheta_gyro_deg = gz_dps*dt*sf
             
-        # Read encoder delta   
-        try: 
-            self.micro.safe_write('A3/4/')
-            s = self.micro.safe_read()
-            if len(s) == 0:
-                delta_enc_left = 0
-            else:
-                delta_enc_left = int(s)
-            s = self.micro.safe_read()
-            if len(s) == 0:
-                delta_enc_right = 0
-            else:
-                delta_enc_right = int(s)
-            s = self.micro.safe_read()
-            if len(s) == 0:
-                print("gyro serial timeout")
-                micro_gyro_z_deg = gz_dps
-            else:
-                micro_gyro_z_deg = float(int(s))/100.
-            #s = self.micro.safe_read()
-            #micro_delta_yaw_deg = float(int(s))/1000. * self.micro_gyro_scale_factor
-        except:
-            delta_enc_left = 0
-            delta_enc_right = 0
-            micro_gyro_z_deg = 0.0
-            micro_delta_yaw_deg = 0.0
-            error_delta_time = self.dt_to_sec(t2, self.error_time)
-            if(error_delta_time > 1.0):
-                print("enc error")
-                print("Unexpected Error:", sys.exc_info()[0] )
-        finally:
-            a=0
-            
-        self.micro.flush()
-            
-        dtheta_micro_gyro_deg = micro_gyro_z_deg * dt * self.micro_gyro_scale_factor
+        # This would come from diff of yaw_deg in odomInputs
+        #dtheta_micro_gyro_deg = micro_gyro_z_deg * dt * self.micro_gyro_scale_factor
         
         # Update odom
-        
+        delta_enc_left = self.enc_left
+        delta_enc_right = self.enc_right
+        self.enc_left = 0
+        self.enc_right = 0
         delta_enc_counts = float(delta_enc_left + delta_enc_right)/2.0
         self.enc_total = self.enc_total + delta_enc_counts
         
@@ -295,7 +210,10 @@ class MicroBridge(Node):
             #print 'use gyro'
             dtheta_deg = dtheta_gyro_deg
             
-        dtheta_deg = dtheta_micro_gyro_deg #intentionally always using micro_gyro_deg vs. dtheta_gyro_deg
+        #dtheta_deg = dtheta_micro_gyro_deg #intentionally always using micro_gyro_deg vs. dtheta_gyro_deg
+        
+        self.ref_cum_dmeters += dmeters # reset in gps callback
+        self.ref_cum_dtheta_deg += dtheta_deg # reset in gps callback
 
         #update bot position
         self.micro_bot_deg = self.micro_bot_deg + dtheta_deg # replaced with yaw_kf.py
@@ -329,7 +247,7 @@ class MicroBridge(Node):
         self.tfs.transform.rotation.y = odom_quat[1]
         self.tfs.transform.rotation.z = odom_quat[2]
         self.tfs.transform.rotation.w = odom_quat[3]
-        #self.odom_broadcaster.sendTransform(self.tfs)
+        self.odom_broadcaster.sendTransform(self.tfs)
         
         odom = Odometry()
         odom.header.stamp = t2
@@ -358,13 +276,6 @@ class MicroBridge(Node):
         # publish the message
         self.odom_pub.publish(odom)
         
-        odom_in_msg = OdomInputs()
-        odom_in_msg.header.stamp = t2
-        odom_in_msg.yaw_deg = self.micro_bot_deg
-        odom_in_msg.enc_left = delta_enc_left
-        odom_in_msg.enc_right = delta_enc_right
-        self.odomIn_pub.publish(odom_in_msg)
-        
         ##### USE IMU TO PUBLISH TRANSFORM BETWEEN LASER AND BASE
         accx = self.accx - 0.1 #confirm with turn-around cal on concrete using rqt_plot
         accy = self.accy + 0.13 #confirm with turn-around cal on conrete using rqt_plot
@@ -380,7 +291,7 @@ class MicroBridge(Node):
         else:
             roll_rad = self.roll_rad
             pitch_rad = self.pitch_rad
-            print('accx,y above 3 m/s^2')
+            #print('accx,y above 3 m/s^2')
         
         if abs(roll_rad) < 0.02:
             self.roll_rad = 0.9*self.roll_rad + 0.1*roll_rad
@@ -399,14 +310,23 @@ class MicroBridge(Node):
         self.laser_tfs.transform.rotation.y = laser_quat[1]
         self.laser_tfs.transform.rotation.z = laser_quat[2]
         self.laser_tfs.transform.rotation.w = laser_quat[3]
-        #self.odom_broadcaster.sendTransform(self.laser_tfs)
+        self.odom_broadcaster.sendTransform(self.laser_tfs)
+        
+        self.gps_tfs.header.stamp = t2
+        self.gps_tfs.transform.translation.x = self.east_ant
+        self.gps_tfs.transform.translation.y = self.north_ant
+        self.gps_tfs.transform.rotation.x = odom_quat[0]
+        self.gps_tfs.transform.rotation.y = odom_quat[1]
+        self.gps_tfs.transform.rotation.z = odom_quat[2]
+        self.gps_tfs.transform.rotation.w = odom_quat[3]
+        self.odom_broadcaster.sendTransform(self.gps_tfs)
         #####
         
         self.prev_time = t2
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MicroBridge()
+    node = GPSFusion()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
