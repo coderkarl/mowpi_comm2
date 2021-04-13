@@ -49,7 +49,7 @@ class MicroSerial():
         # 115200 bits/sec = 14400 bytes/sec = 14 bytes/msec
         # When reading a number in this application, max bytes 7 bytes ("-32767\n")
         # So try timeout = 0.002 sec or 28 bytes per readline()
-        self.serial = serial.Serial('/dev/mowpi_arduino', baudrate=115200, timeout=0.01) #CHANGE TIMEOUT TO SHORT HERE
+        self.serial = serial.Serial('/dev/mowpi_feather', baudrate=115200, timeout=0.01) #CHANGE TIMEOUT TO SHORT HERE
         
     def safe_write(self, val_str):
         #self.lock.acquire()
@@ -289,7 +289,7 @@ class MicroBridge(Node):
         dtheta_enc_deg = float(delta_enc_right - delta_enc_left) / COUNTS_PER_METER / BOT_WIDTH * 180.0 / pi
 
         if(abs(dtheta_gyro_deg) > MAX_DTHETA_GYRO_deg):
-            print 'no gyro'
+            print('no gyro')
             dtheta_deg = dtheta_enc_deg
         else:
             #print 'use gyro'
@@ -361,13 +361,13 @@ class MicroBridge(Node):
         odom_in_msg = OdomInputs()
         odom_in_msg.header.stamp = t2
         odom_in_msg.yaw_deg = self.micro_bot_deg
-        odom_in_msg.encLeft = delta_enc_left
-        odom_in_msg.encRight = delta_enc_right
+        odom_in_msg.enc_left = delta_enc_left
+        odom_in_msg.enc_right = delta_enc_right
         self.odomIn_pub.publish(odom_in_msg)
         
         ##### USE IMU TO PUBLISH TRANSFORM BETWEEN LASER AND BASE
-        accx = self.accx - 0.3 #confirm with turn-around cal on concrete using rqt_plot
-        accy = self.accy + 0.2 #confirm with turn-around cal on conrete using rqt_plot
+        accx = self.accx - 0.1 #confirm with turn-around cal on concrete using rqt_plot
+        accy = self.accy + 0.13 #confirm with turn-around cal on conrete using rqt_plot
         
         if(abs(accx) < 3 and abs(accy) < 3):
             try:
@@ -395,10 +395,10 @@ class MicroBridge(Node):
         laser_quat = transformations.quaternion_from_euler(-self.roll_rad, -self.pitch_rad, pi) #- roll, -pitch b/c of 180 deg yaw
         
         self.laser_tfs.header.stamp = t2
-        self.laser_tfs.transform.rotation.x = odom_quat[0]
-        self.laser_tfs.transform.rotation.y = odom_quat[1]
-        self.laser_tfs.transform.rotation.z = odom_quat[2]
-        self.laser_tfs.transform.rotation.w = odom_quat[3]
+        self.laser_tfs.transform.rotation.x = laser_quat[0]
+        self.laser_tfs.transform.rotation.y = laser_quat[1]
+        self.laser_tfs.transform.rotation.z = laser_quat[2]
+        self.laser_tfs.transform.rotation.w = laser_quat[3]
         self.odom_broadcaster.sendTransform(self.laser_tfs)
         #####
         
