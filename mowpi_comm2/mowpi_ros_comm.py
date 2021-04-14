@@ -84,7 +84,7 @@ class Controller():
         curv_byte = bytes([ (raw_omega) & 0xff]) # -120 to 120 deg/sec
         #print('speed_byte, curv_byte', speed_byte, curv_byte)
         
-        self.ard.safe_write('A1/1/' + str(raw_speed) + '/' + str(raw_omega) + '/')
+        self.micro.safe_write('A1/1/' + str(raw_speed) + '/' + str(raw_omega) + '/')
         return
 
 class MicroBridge(Node):
