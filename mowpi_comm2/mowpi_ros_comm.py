@@ -360,7 +360,7 @@ class MicroBridge(Node):
         
         odom_in_msg = OdomInputs()
         odom_in_msg.header.stamp = t2
-        odom_in_msg.yaw_deg = self.micro_bot_deg
+        odom_in_msg.yaw_deg = dtheta_micro_gyro_deg #self.micro_bot_deg
         odom_in_msg.enc_left = delta_enc_left
         odom_in_msg.enc_right = delta_enc_right
         self.odomIn_pub.publish(odom_in_msg)

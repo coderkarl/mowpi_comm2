@@ -82,10 +82,12 @@ class GPSFusion(Node):
         # Odom inputs
         self.enc_left = 0.
         self.enc_right = 0.
+        self.dtheta_odomInputs = 0.
         
         # GPS odom fusion
         self.gps_initialized = False
         self.ref_cum_dmeters = 0.0
+        self.prev_cum_dmeters = 0.0
         self.ref_cum_dtheta_deg = 0.0
         self.init_gps_east_sum = 0.0
         self.init_gps_north_sum = 0.0
@@ -93,6 +95,8 @@ class GPSFusion(Node):
         self.gps_buffer = []
         self.buffer_size = 5
         self.buffer_full = False
+        
+        self.ant_local_x = 0.6 # antenna coordinates in base_link frame (from center of rotation)
         
         self.timer = self.create_timer(1./20., self.update_odom)
         
@@ -117,12 +121,13 @@ class GPSFusion(Node):
     def odom_callback(self, data):
         self.enc_left += data.enc_left
         self.enc_right += data.enc_left
+        self.dtheta_odomInputs += data.yaw_deg
         
     def gps_callback(self, msg):
         #try:
         yaw_rad = self.micro_bot_deg*pi/180
-        rel_east = msg.rel_pos_e/100. - 1.0*cos(yaw_rad)
-        rel_north = msg.rel_pos_n/100. - 1.0*sin(yaw_rad)
+        rel_east = msg.rel_pos_e/100. - self.ant_local_x*cos(yaw_rad)
+        rel_north = msg.rel_pos_n/100. - self.ant_local_x*sin(yaw_rad)
         self.east_ant = msg.rel_pos_e/100.
         self.north_ant = msg.rel_pos_n/100.
         if not self.gps_initialized:
@@ -134,28 +139,32 @@ class GPSFusion(Node):
                 self.boty = self.init_gps_north_sum / self.init_gps_count
                 self.gps_initialized = True
         else:
-            self.botx = self.botx*0.9 + rel_east*0.1
-            self.boty = self.boty*0.9 + rel_north*0.1
+            alpha = 0.9
+            if abs(self.dtheta_odomInputs) > 1.5:
+                alpha = 0.05
+            self.botx = self.botx*alpha + rel_east*(1.0-alpha)
+            self.boty = self.boty*alpha + rel_north*(1.0-alpha)
             if len(self.gps_buffer) == self.buffer_size:
                 self.gps_buffer.pop(0)
                 self.buffer_full = True
-            self.gps_buffer.append([self.east_ant, self.north_ant])
+            if self.ref_cum_dmeters - self.prev_cum_dmeters > 0.1:
+                self.gps_buffer.append([self.east_ant, self.north_ant])
             #print("cum_dmeters %.1f, cum_dtheta_deg %.1f" % (self.ref_cum_dmeters, self.ref_cum_dtheta_deg) )
-            if self.buffer_full and self.ref_cum_dmeters > 1.0 and abs(self.ref_cum_dtheta_deg) < 10.0:
+            if self.buffer_full and self.ref_cum_dmeters > 0.7 and abs(self.ref_cum_dtheta_deg) < 20.0:
                 self.ref_cum_dmeters = 0.0
                 self.ref_cum_dtheta_deg = 0.0
                 dE = self.gps_buffer[-1][0] - self.gps_buffer[0][0]
                 dN = self.gps_buffer[-1][1] - self.gps_buffer[0][1]
                 gps_heading_deg = atan2(dN,dE)*180.0/pi
                 print("gps_heading_deg %.1f, micro_bot_deg %.1f" % (gps_heading_deg, self.micro_bot_deg) )
-                if abs((gps_heading_deg - self.micro_bot_deg) % 360.0) < 30.0:
-                    cur_cos = cos(yaw_rad)
-                    cur_sin = sin(yaw_rad)
-                    gps_cos = cos(gps_heading_deg*pi/180)
-                    gps_sin = sin(gps_heading_deg*pi/180)
-                    net_cos = cur_cos*0.9 + gps_cos*0.1
-                    net_sin = cur_sin*0.9 + gps_sin*0.1
-                    self.micro_bot_deg = atan2(net_sin, net_cos)*180/pi
+                #if True or (abs((gps_heading_deg - self.micro_bot_deg) % 360.0) < 45.0):
+                cur_cos = cos(yaw_rad)
+                cur_sin = sin(yaw_rad)
+                gps_cos = cos(gps_heading_deg*pi/180)
+                gps_sin = sin(gps_heading_deg*pi/180)
+                net_cos = cur_cos*0.9 + gps_cos*0.1
+                net_sin = cur_sin*0.9 + gps_sin*0.1
+                self.micro_bot_deg = atan2(net_sin, net_cos)*180/pi
             elif self.ref_cum_dmeters > 1.0:
                 self.ref_cum_dmeters = 0.0
                 self.ref_cum_dtheta_deg = 0.0
@@ -211,6 +220,10 @@ class GPSFusion(Node):
             dtheta_deg = dtheta_gyro_deg
             
         #dtheta_deg = dtheta_micro_gyro_deg #intentionally always using micro_gyro_deg vs. dtheta_gyro_deg
+        dtheta_deg = self.dtheta_odomInputs
+        self.dtheta_odomInputs = 0.
+        #if(delta_enc_left == 0 and delta_enc_right == 0):
+        #    dtheta_deg = 0.
         
         self.ref_cum_dmeters += dmeters # reset in gps callback
         self.ref_cum_dtheta_deg += dtheta_deg # reset in gps callback
