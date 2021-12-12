@@ -31,6 +31,7 @@ class ReadLine:
             r = self.buf[:i+1]
             self.buf = self.buf[i+1:]
             return r
+        count = 0
         while True:
             i = max(1, min(2048, self.s.in_waiting))
             data = self.s.read(i)
@@ -41,6 +42,9 @@ class ReadLine:
                 return r
             else:
                 self.buf.extend(data)
+            count += 1
+            if count > 100:
+                return []
 
 class MicroSerial():
 
@@ -148,6 +152,8 @@ class MicroBridge(Node):
         self.neg_gyro_scale_factor = 1.005
         self.pos_gyro_scale_factor = 1.001
         
+        self.bad_serial_count = 0
+        
         # original NXP mounted
         #self.gyro_bias_rad = 0.15*pi/180
         #self.neg_gyro_scale_factor = 1.014
@@ -248,6 +254,7 @@ class MicroBridge(Node):
             s = self.micro.safe_read()
             if len(s) == 0:
                 delta_enc_left = 0
+                self.bad_serial_count += 1
             else:
                 delta_enc_left = int(s)
             s = self.micro.safe_read()
@@ -264,6 +271,7 @@ class MicroBridge(Node):
             #s = self.micro.safe_read()
             #micro_delta_yaw_deg = float(int(s))/1000. * self.micro_gyro_scale_factor
         except:
+            self.bad_serial_count += 1
             delta_enc_left = 0
             delta_enc_right = 0
             micro_gyro_z_deg = 0.0
@@ -274,6 +282,10 @@ class MicroBridge(Node):
                 print("Unexpected Error:", sys.exc_info()[0] )
         finally:
             a=0
+            
+        if self.bad_serial_count > 10:
+            self.bad_serial_count = 0
+            print("Bad Serial Count Limit 10 Reached")
             
         self.micro.flush()
             
@@ -380,7 +392,7 @@ class MicroBridge(Node):
         else:
             roll_rad = self.roll_rad
             pitch_rad = self.pitch_rad
-            print('accx,y above 3 m/s^2')
+            #print('accx,y above 3 m/s^2')
         
         if abs(roll_rad) < 0.02:
             self.roll_rad = 0.9*self.roll_rad + 0.1*roll_rad
