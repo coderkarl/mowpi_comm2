@@ -79,9 +79,13 @@ class Controller():
 
     def write_speed_curv(self, speed_in, curv_in):
         #  A1/1/<speed_byte> <curv_byte>
+        if np.isnan(speed_in) or np.isnan(curv_in):
+            speed_in = 0
+            curv_in = 0
         self.speed = speed_in # m/s
         self.curv = curv_in # rad/sec
         #print('speed, curv', speed_in, curv_in)
+        
         raw_speed = int(speed_in*100.0)+120
         raw_omega = int(curv_in*180.0/pi)+120
         speed_byte = bytes([ raw_speed & 0xff]) #-120 to 120 cm/sec

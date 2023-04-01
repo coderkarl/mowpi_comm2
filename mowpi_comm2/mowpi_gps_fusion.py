@@ -15,6 +15,7 @@ from geometry_msgs.msg import TransformStamped
 
 from my_interfaces.msg import OdomInputs
 from ublox_msgs.msg import NavRELPOSNED
+from sensor_msgs.msg import NavSatFix
 
 import serial
 import sys
@@ -25,9 +26,30 @@ class GPSFusion(Node):
     def __init__(self):
         super().__init__("gps_fusion")
         
+        self.useRelPose = False
+        self.useGPSx = True
+        self.useGPSy = True
+        self.declare_parameter("lat0", 0.0)
+        self.declare_parameter("lon0", 0.0)
+        self.declare_parameter("dNcm_dlat", 1.0)
+        self.declare_parameter("dEcm_dlon", 1.0)
+        
+        self.lat0 = self.get_parameter("lat0").value
+        self.lon0 = self.get_parameter("lon0").value
+        self.dNcm_dlat = self.get_parameter("dNcm_dlat").value
+        self.dEcm_dlon = self.get_parameter("dEcm_dlon").value
+        
+        print("lat0 %.7f" % (self.lat0))
+        print("lon0 %.7f" % (self.lon0))
+        print("dNcm_dlat %.7f" % (self.dNcm_dlat))
+        print("dEcm_dlon %.7f" % (self.dEcm_dlon))
+        
         self.imu_sub = self.create_subscription(Imu, "imu", self.imu_callback, 2)
         self.odomIn_sub = self.create_subscription(OdomInputs, "odomInputs", self.odom_callback, 5)
-        self.gps_sub = self.create_subscription(NavRELPOSNED, "navrelposned", self.gps_callback, 2)
+        if self.useRelPose:
+            self.gps_sub = self.create_subscription(NavRELPOSNED, "navrelposned", self.gps_callback, 2)
+        else:
+            self.gps_sub = self.create_subscription(NavSatFix, "fix", self.gps_callback, 2)
         
         self.odom_pub = self.create_publisher(Odometry, "odom", 5)
         
@@ -96,7 +118,9 @@ class GPSFusion(Node):
         self.buffer_size = 5
         self.buffer_full = False
         
-        self.ant_local_x = 0.6 # antenna coordinates in base_link frame (from center of rotation)
+        #self.ant_local_x = 0.6 # antenna coordinates in base_link frame (from center of rotation)
+        self.ant_local_x = 0.6 - 5*0.025
+        self.ant_local_y = -7*0.025
         
         self.timer = self.create_timer(1./20., self.update_odom)
         
@@ -120,16 +144,22 @@ class GPSFusion(Node):
                 
     def odom_callback(self, data):
         self.enc_left += data.enc_left
-        self.enc_right += data.enc_left
+        self.enc_right += data.enc_right
         self.dtheta_odomInputs += data.yaw_deg
         
     def gps_callback(self, msg):
         #try:
+        if self.useRelPose:
+            relE = msg.rel_pos_e/100.
+            relN = msg.rel_pos_n/100.
+        else:
+            relE = (msg.longitude - self.lon0) * self.dEcm_dlon / 100.
+            relN = (msg.latitude - self.lat0) * self.dNcm_dlat / 100.
         yaw_rad = self.micro_bot_deg*pi/180
-        rel_east = msg.rel_pos_e/100. - self.ant_local_x*cos(yaw_rad)
-        rel_north = msg.rel_pos_n/100. - self.ant_local_x*sin(yaw_rad)
-        self.east_ant = msg.rel_pos_e/100.
-        self.north_ant = msg.rel_pos_n/100.
+        rel_east = relE - self.ant_local_x*cos(yaw_rad) + self.ant_local_y*sin(yaw_rad)
+        rel_north = relN - self.ant_local_x*sin(yaw_rad) - self.ant_local_y*cos(yaw_rad)
+        self.east_ant = relE
+        self.north_ant = relN
         if not self.gps_initialized:
             self.init_gps_east_sum += rel_east
             self.init_gps_north_sum += rel_north
@@ -139,11 +169,13 @@ class GPSFusion(Node):
                 self.boty = self.init_gps_north_sum / self.init_gps_count
                 self.gps_initialized = True
         else:
-            alpha = 0.9
+            alpha = 0.97
             if abs(self.dtheta_odomInputs) > 1.5:
                 alpha = 0.05
-            self.botx = self.botx*alpha + rel_east*(1.0-alpha)
-            self.boty = self.boty*alpha + rel_north*(1.0-alpha)
+            if self.useGPSx:
+                self.botx = self.botx*alpha + rel_east*(1.0-alpha)
+            if self.useGPSy:
+                self.boty = self.boty*alpha + rel_north*(1.0-alpha)
             if len(self.gps_buffer) == self.buffer_size:
                 self.gps_buffer.pop(0)
                 self.buffer_full = True
