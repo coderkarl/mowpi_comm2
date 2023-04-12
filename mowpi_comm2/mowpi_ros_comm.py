@@ -14,11 +14,15 @@ from tf2_ros.transform_broadcaster import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
 
 from my_interfaces.msg import OdomInputs
+from my_interfaces.srv import SetInt
 
 import serial
 import sys
 import numpy as np
 import time
+
+from functools import partial #allows more arguments to a callback
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
 class ReadLine:
     def __init__(self, s):
@@ -99,12 +103,17 @@ class MicroBridge(Node):
     def __init__(self):
         super().__init__("mowpi_ros_comm")
         
-        self.cmd_sub = self.create_subscription(Twist, "cmd_vel", self.drive_callback, 1)
+        self.cmd_sub = self.create_subscription(Twist, "cmd_vel_2", self.drive_callback, 1)
         self.blade_cmd_sub = self.create_subscription(Int16, "blade_cmd", self.blade_callback, 2)
         self.imu_sub = self.create_subscription(Imu, "imu", self.imu_callback, 2)
         self.yawkf_sub = self.create_subscription(Float32, "yawkf_deg", self.yawkf_callback, 2)
         
-        self.odom_pub = self.create_publisher(Odometry, "odom_raw", 5)
+        odom_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT,
+            history=QoSHistoryPolicy.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
+            depth=5
+        )
+        self.odom_pub = self.create_publisher(Odometry, "odom_raw", qos_profile = odom_qos)
         self.odomIn_pub = self.create_publisher(OdomInputs, "odomInputs",5)
 
         self.odom_broadcaster = TransformBroadcaster(self)
@@ -140,7 +149,11 @@ class MicroBridge(Node):
         
         self.dist_sum = 0
         self.time_sum = 0
-        self.vx = 0
+        self.vx = 0.0
+        self.stopped_db_limit = 10
+        self.stopped_speed = 0.05
+        self.stopped_gyro_deg = 5.0
+        self.stopped_count = 0
 
         self.bot_deg_prev = 0.
         self.bot_deg = 0.
@@ -157,6 +170,8 @@ class MicroBridge(Node):
         self.pos_gyro_scale_factor = 1.001
         
         self.bad_serial_count = 0
+        
+        self.mow_area_id = 0
         
         # original NXP mounted
         #self.gyro_bias_rad = 0.15*pi/180
@@ -226,6 +241,26 @@ class MicroBridge(Node):
                 
     def yawkf_callback(self, msg):
         self.bot_deg = msg.data
+        
+    def call_set_mow(self, mow_area_id):
+        client = self.create_client(SetInt, "set_mow_area")
+        while not client.wait_for_service(1.0):
+            self.get_logger().warn("Waiting for server set_mow_area")
+            
+        request = SetInt.Request()
+        request.data = mow_area_id
+        future = client.call_async(request) #call or call_async
+        future.add_done_callback(partial(self.call_set_mow_callback, mow_area=mow_area_id) ) # not a ros feature, just python future feature
+                    
+    def call_set_mow_callback(self, future, mow_area):
+        try:
+            response = future.result()
+            self.get_logger().info('response: %d' % (response.success))
+            if response.success:
+                self.mow_area_id = mow_area
+                self.get_logger().info('mow area %d' % (self.mow_area_id))
+        except Exception as e:
+            node.get_logger().error("Service call failed %r" % (e,) )
     
     def update_odom(self):
         t2 = self.get_clock().now().to_msg()
@@ -333,6 +368,18 @@ class MicroBridge(Node):
         self.time_sum = self.time_sum + dt
         if(self.time_sum > 0.15):
             self.vx = self.dist_sum / self.time_sum
+            # TODO: PUT THIS IN A FUNCTION
+            if abs(self.vx) < self.stopped_speed and abs(micro_gyro_z_deg) < self.stopped_gyro_deg:
+                self.stopped_count += 1
+                self.micro.safe_write('A3/1/')
+                s = self.micro.safe_read()
+                if len(s) > 0:
+                    mow_area = int(s)
+                    if not mow_area == self.mow_area_id:
+                        self.call_set_mow(mow_area)
+                else:
+                    self.stopped_count = 0
+            # END FUNCTION
             self.dist_sum = 0
             self.time_sum = 0
         
