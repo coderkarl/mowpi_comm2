@@ -119,8 +119,8 @@ class GPSFusion(Node):
         self.buffer_full = False
         
         #self.ant_local_x = 0.6 # antenna coordinates in base_link frame (from center of rotation)
-        self.ant_local_x = 0.6 - 5*0.025
-        self.ant_local_y = -7*0.025
+        self.ant_local_x = 0.0 #0.6 - 5*0.025
+        self.ant_local_y = 0.0 #-7*0.025
         
         self.timer = self.create_timer(1./20., self.update_odom)
         
@@ -348,7 +348,7 @@ class GPSFusion(Node):
         else:
             self.pitch_rad = pitch_rad
                 
-        laser_quat = transformations.quaternion_from_euler(-self.roll_rad, -self.pitch_rad, pi) #- roll, -pitch b/c of 180 deg yaw
+        laser_quat = transformations.quaternion_from_euler(self.pitch_rad, self.roll_rad, -pi/2) #- roll, -pitch b/c of 180 deg yaw
         
         self.laser_tfs.header.stamp = t2
         self.laser_tfs.transform.rotation.x = laser_quat[0]

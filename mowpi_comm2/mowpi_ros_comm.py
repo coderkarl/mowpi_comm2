@@ -103,7 +103,7 @@ class MicroBridge(Node):
     def __init__(self):
         super().__init__("mowpi_ros_comm")
         
-        self.cmd_sub = self.create_subscription(Twist, "cmd_vel_2", self.drive_callback, 1)
+        self.cmd_sub = self.create_subscription(Twist, "cmd_vel", self.drive_callback, 1)
         self.blade_cmd_sub = self.create_subscription(Int16, "blade_cmd", self.blade_callback, 2)
         self.imu_sub = self.create_subscription(Imu, "imu", self.imu_callback, 2)
         self.yawkf_sub = self.create_subscription(Float32, "yawkf_deg", self.yawkf_callback, 2)
@@ -455,7 +455,7 @@ class MicroBridge(Node):
         else:
             self.pitch_rad = pitch_rad
                 
-        laser_quat = transformations.quaternion_from_euler(-self.roll_rad, -self.pitch_rad, pi) #- roll, -pitch b/c of 180 deg yaw
+        laser_quat = transformations.quaternion_from_euler(self.pitch_rad, self.roll_rad, -pi/2) #- roll, -pitch b/c of 180 deg yaw
         
         self.laser_tfs.header.stamp = t2
         self.laser_tfs.transform.rotation.x = laser_quat[0]
