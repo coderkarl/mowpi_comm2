@@ -49,7 +49,7 @@ class GPSFusion(Node):
         if self.useRelPose:
             self.gps_sub = self.create_subscription(NavRELPOSNED, "navrelposned", self.gps_callback, 2)
         else:
-            self.gps_sub = self.create_subscription(NavSatFix, "fix", self.gps_callback, 2)
+            self.gps_sub = self.create_subscription(NavSatFix, "/ublox_gps_node/fix", self.gps_callback, 2)
         
         self.odom_pub = self.create_publisher(Odometry, "odom", 5)
         
@@ -62,7 +62,7 @@ class GPSFusion(Node):
         self.laser_tfs = TransformStamped()
         self.laser_tfs.header.frame_id = "base_link"
         self.laser_tfs.child_frame_id = "laser"
-        self.laser_tfs.transform.translation.x = 0.2
+        self.laser_tfs.transform.translation.x = 0.1
         self.laser_tfs.transform.translation.y = 0.0
         self.laser_tfs.transform.translation.z = 0.0
         
@@ -209,8 +209,8 @@ class GPSFusion(Node):
         t1 = self.prev_time
         dt = self.dt_to_sec(t2,t1)
         
-        BOT_WIDTH = (28.0 * 2.54 / 100.0) #meters
-        COUNTS_PER_METER = 162.52
+        BOT_WIDTH = 0.55 #meters
+        COUNTS_PER_METER = 1028.0
         
         # Process gyro z
         gyro_thresh_dps = 0.3
@@ -348,7 +348,8 @@ class GPSFusion(Node):
         else:
             self.pitch_rad = pitch_rad
                 
-        laser_quat = transformations.quaternion_from_euler(self.pitch_rad, self.roll_rad, -pi/2) #- roll, -pitch b/c of 180 deg yaw
+        laser_yaw = pi/2.0 + 3.0*pi/180.0
+        laser_quat = transformations.quaternion_from_euler(self.pitch_rad, self.roll_rad, laser_yaw) #- roll, -pitch b/c of 180 deg yaw
         
         self.laser_tfs.header.stamp = t2
         self.laser_tfs.transform.rotation.x = laser_quat[0]

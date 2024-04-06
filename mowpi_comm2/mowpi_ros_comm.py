@@ -194,7 +194,7 @@ class MicroBridge(Node):
         v = data.linear.x
         w = data.angular.z
         max_speed = 1.2
-        max_omega = 120*pi/180.0
+        max_omega = 180*pi/180.0
         
         if v > max_speed:
             v = max_speed
@@ -267,8 +267,8 @@ class MicroBridge(Node):
         t1 = self.prev_time
         dt = self.dt_to_sec(t2,t1)
         
-        BOT_WIDTH = (28.0 * 2.54 / 100.0) #meters
-        COUNTS_PER_METER = 162.52
+        BOT_WIDTH = 0.55 #meters
+        COUNTS_PER_METER = 1028.0
         
         # Process gyro z
         gyro_thresh_dps = 0.3
