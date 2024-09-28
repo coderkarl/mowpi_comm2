@@ -21,7 +21,8 @@ setup(
     entry_points={
         'console_scripts': [
             "mowpi_comm = mowpi_comm2.mowpi_ros_comm:main",
-            "gps_fusion = mowpi_comm2.mowpi_gps_fusion:main"
+            "gps_fusion = mowpi_comm2.mowpi_gps_fusion:main",
+            "descent_comm = mowpi_comm2.descent_ros_comm:main",
         ],
     },
 )
