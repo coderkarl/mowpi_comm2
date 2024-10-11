@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/karl/bno-env/bin/python3
 import rclpy
 from rclpy.node import Node
 
@@ -23,6 +23,24 @@ import time
 
 from functools import partial #allows more arguments to a callback
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
+
+import board
+import busio
+from adafruit_bno08x import (
+    BNO_REPORT_ACCELEROMETER,
+    BNO_REPORT_GYROSCOPE,
+    BNO_REPORT_MAGNETOMETER,
+    BNO_REPORT_ROTATION_VECTOR,
+)
+from adafruit_bno08x.i2c import BNO08X_I2C
+
+i2c = busio.I2C(board.SCL, board.SDA, frequency=400000)
+bno = BNO08X_I2C(i2c)
+
+bno.enable_feature(BNO_REPORT_ACCELEROMETER)
+bno.enable_feature(BNO_REPORT_GYROSCOPE)
+bno.enable_feature(BNO_REPORT_MAGNETOMETER)
+bno.enable_feature(BNO_REPORT_ROTATION_VECTOR)
 
 class ReadLine:
     def __init__(self, s):
@@ -111,7 +129,7 @@ class MicroBridge(Node):
             history=QoSHistoryPolicy.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
             depth=5
         )
-        self.odom_pub = self.create_publisher(Odometry, "odom_raw", qos_profile = odom_qos)
+        self.odom_pub = self.create_publisher(Odometry, "odom", qos_profile = odom_qos)
         self.odomIn_pub = self.create_publisher(OdomInputs, "odomInputs",5)
 
         self.odom_broadcaster = TransformBroadcaster(self)
@@ -227,8 +245,10 @@ class MicroBridge(Node):
         t1 = self.prev_time
         dt = self.dt_to_sec(t2,t1)
         
+        gyro_x_rad, gyro_y_rad, gyro_z_rad = bno.gyro
+        
         BOT_WIDTH = 0.55 #meters
-        COUNTS_PER_METER = 1028.0
+        COUNTS_PER_METER = 290.7
         
         # Process gyro z
         gyro_thresh_dps = 0.3
@@ -258,7 +278,6 @@ class MicroBridge(Node):
                 delta_enc_left = int(s)
             
             delta_enc_right = delta_enc_left
-            micro_gyro_z_deg = 0.0
             
         except:
             self.bad_serial_count += 1
@@ -278,8 +297,10 @@ class MicroBridge(Node):
             print("Bad Serial Count Limit 10 Reached")
             
         self.micro.flush()
+        
+        micro_gyro_z_deg = gyro_z_rad*180.0/pi
             
-        dtheta_micro_gyro_deg = micro_gyro_z_deg * dt * self.micro_gyro_scale_factor
+        dtheta_micro_gyro_deg = micro_gyro_z_deg * dt #* self.micro_gyro_scale_factor
         
         # Update odom
         
@@ -360,7 +381,7 @@ class MicroBridge(Node):
             gz_dps = 0
         #odom.twist.twist = Twist(Vector3(self.vx, 0, 0), Vector3(0, 0, gz_dps*pi/180.0))
         odom.twist.twist.linear.x = self.vx
-        odom.twist.twist.angular.z = gz_dps*pi/180.0
+        odom.twist.twist.angular.z = micro_gyro_z_deg*pi/180.0
 
         # publish the message
         self.odom_pub.publish(odom)
