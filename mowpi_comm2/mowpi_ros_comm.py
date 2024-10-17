@@ -287,7 +287,7 @@ class MicroBridge(Node):
         dt = self.dt_to_sec(t2,t1)
         
         BOT_WIDTH = 0.55 #meters
-        COUNTS_PER_METER = 1028.0
+        COUNTS_PER_METER = 2005.0
         
         # Process gyro z
         gyro_thresh_dps = 0.3
