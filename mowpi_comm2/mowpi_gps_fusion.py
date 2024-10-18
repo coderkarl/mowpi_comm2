@@ -29,6 +29,7 @@ class GPSFusion(Node):
         self.useRelPose = False
         self.useGPSx = True
         self.useGPSy = True
+        self.gps_origin_reset = False
         self.declare_parameter("lat0", 0.0)
         self.declare_parameter("lon0", 0.0)
         self.declare_parameter("dNcm_dlat", 1.0)
@@ -114,6 +115,7 @@ class GPSFusion(Node):
         self.init_gps_east_sum = 0.0
         self.init_gps_north_sum = 0.0
         self.init_gps_count = 0
+        self.home_gps_count = 0
         self.gps_buffer = []
         self.buffer_size = 5
         self.buffer_full = False
@@ -155,12 +157,31 @@ class GPSFusion(Node):
         else:
             relE = (msg.longitude - self.lon0) * self.dEcm_dlon / 100.
             relN = (msg.latitude - self.lat0) * self.dNcm_dlat / 100.
+        if not self.gps_origin_reset and (abs(relE) > 200.0 or abs(relN) > 200.0):
+            self.home_gps_count = 0
+            self.init_gps_count += 1
+            print("away count %d" % (self.init_gps_count))
+            if self.init_gps_count >= 10:
+                relE = 0.0
+                relN = 0.0
+                self.lon0 = msg.longitude
+                self.lat0 = msg.latitude
+                self.gps_origin_reset = True
+                print ("gps origin reset away from home")
+        elif not self.gps_origin_reset:
+            self.init_gps_count = 0
+            self.home_gps_count += 1
+            print("home count %d" % (self.home_gps_count))
+            if self.home_gps_count >= 10:
+                self.gps_origin_reset = True
+                print ("gps origin at home")
+        
         yaw_rad = self.micro_bot_deg*pi/180
         rel_east = relE - self.ant_local_x*cos(yaw_rad) + self.ant_local_y*sin(yaw_rad)
         rel_north = relN - self.ant_local_x*sin(yaw_rad) - self.ant_local_y*cos(yaw_rad)
         self.east_ant = relE
         self.north_ant = relN
-        if not self.gps_initialized:
+        if self.gps_origin_reset and not self.gps_initialized:
             self.init_gps_east_sum += rel_east
             self.init_gps_north_sum += rel_north
             self.init_gps_count += 1
@@ -170,8 +191,8 @@ class GPSFusion(Node):
                 self.gps_initialized = True
         else:
             alpha = 0.97
-            if abs(self.dtheta_odomInputs) > 1.5:
-                alpha = 0.05
+            #if abs(self.dtheta_odomInputs) > 1.5:
+            #    alpha = 0.05
             if self.useGPSx:
                 self.botx = self.botx*alpha + rel_east*(1.0-alpha)
             if self.useGPSy:
